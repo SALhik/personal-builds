@@ -174,6 +174,9 @@ label export {
  	mistralProviderSchema,
  	moonshotProviderSchema,
  	minimaxProviderSchema,
+
+label export {
+
  	type BedrockProviderConfig,
  	type VertexProviderConfig,
  	type GeminiProviderConfig,
@@ -215,6 +218,9 @@ label import {
  	minimaxModels,
  	minimaxDefaultModelId,
  	ovhCloudAiEndpointsDefaultModelId,
+
+label export const PROVIDER_TO_ROUTER_NAME: Record<ProviderName, RouterName | null> =
+
  	featherless: null,
  	roo: null,
  	"claude-code": null,
@@ -222,6 +228,9 @@ label import {
  	"virtual-quota-fallback": null,
  	huggingface: null,
  	inception: null,
+
+label export const PROVIDER_MODEL_FIELD: Record<ProviderName, string | null> = {
+
  	featherless: null,
  	roo: null,
  	"claude-code": null,
@@ -229,12 +238,18 @@ label import {
  	"virtual-quota-fallback": null,
  	huggingface: null,
  	inception: "inceptionLabsModelId",
+
+label export const DEFAULT_MODEL_IDS: Partial<Record<ProviderName, string>> = {
+
  	minimax: "MiniMax-M2",
  	zai: internationalZAiDefaultModelId,
  	roo: rooDefaultModelId,
 +	"gemini-cli": geminiCliDefaultModelId,
  	ovhcloud: ovhCloudAiEndpointsDefaultModelId,
  }
+ 
+
+label export function getModelsByProvider(params: {
  
  				models: claudeCodeModels as ModelRecord,
  				defaultModel: claudeCodeDefaultModelId,
@@ -269,6 +284,9 @@ label export const FIELD_REGISTRY: Record<string, FieldMetadata> = {
  	// ZAI fields
  	zaiApiKey: {
  		label: "API Key",
+
+label export const getProviderSettings = (provider: ProviderName, config: ProviderSett
+
  		case "qwen-code":
  			return [createFieldConfig("qwenCodeOauthPath", config, "~/.qwen/oauth_creds.json")]
  
@@ -281,10 +299,13 @@ label export const FIELD_REGISTRY: Record<string, FieldMetadata> = {
  		case "zai":
  			return [
  				createFieldConfig("zaiApiKey", config),
+
+label export const PROVIDER_DEFAULT_MODELS: Record<ProviderName, string> = {
+
  	deepinfra: "meta-llama/Meta-Llama-3.1-70B-Instruct",
  	"io-intelligence": "gpt-4o",
  	"qwen-code": "qwen-coder-plus-latest",
-+	"gemini-cli": "gemini-1.5-pro-latest",
++	"gemini-cli": "gemini-2.5-flash",
  	zai: "gpt-4o",
  	unbound: "gpt-4o",
  	requesty: "gpt-4o",
@@ -317,6 +338,9 @@ label export const geminiProviderSchema = baseProviderSchema.extend({
  // Mistral provider
  export const mistralProviderSchema = baseProviderSchema.extend({
  	provider: z.literal("mistral"),
+
+label export const providerConfigSchema = z.discriminatedUnion("provider", [
+
  	bedrockProviderSchema,
  	vertexProviderSchema,
  	geminiProviderSchema,
@@ -324,6 +348,9 @@ label export const geminiProviderSchema = baseProviderSchema.extend({
  	mistralProviderSchema,
  	moonshotProviderSchema,
  	minimaxProviderSchema,
+
+label export type InceptionProviderConfig = z.infer<typeof inceptionProviderSchema>
+
  export type BedrockProviderConfig = z.infer<typeof bedrockProviderSchema>
  export type VertexProviderConfig = z.infer<typeof vertexProviderSchema>
  export type GeminiProviderConfig = z.infer<typeof geminiProviderSchema>
@@ -342,6 +369,12 @@ label export const providerNames = [
  	"groq",
  	"mistral",
  	"moonshot",
+ 	"minimax",
+ 	"openai-codex",
+ 	"openai-native",
+ 	"openai-responses", // kilocode_change
+ 	"qwen-code",
+ 	"roo",
  	// kilocode_change start
  	"kilocode",
  	"minimax",
@@ -349,6 +382,9 @@ label export const providerNames = [
  	"virtual-quota-fallback",
  	"synthetic",
  	"inception",
+
+label const geminiSchema = apiModelIdProviderModelSchema.extend({
+
  	enableGrounding: z.boolean().optional(),
  })
  
@@ -362,6 +398,9 @@ label export const providerNames = [
  const openAiCodexSchema = apiModelIdProviderModelSchema.extend({
  	// No additional settings needed - uses OAuth authentication
  })
+
+label export const providerSettingsSchemaDiscriminated = z.discriminatedUnion("apiProv
+
  	fakeAiSchema.merge(z.object({ apiProvider: z.literal("fake-ai") })),
  	xaiSchema.merge(z.object({ apiProvider: z.literal("xai") })),
  	// kilocode_change start
@@ -369,6 +408,9 @@ label export const providerNames = [
  	kilocodeSchema.merge(z.object({ apiProvider: z.literal("kilocode") })),
  	virtualQuotaFallbackSchema.merge(z.object({ apiProvider: z.literal("virtual-quota-fallback") })),
  	syntheticSchema.merge(z.object({ apiProvider: z.literal("synthetic") })),
+
+label export const providerSettingsSchema = z.object({
+
  	...lmStudioSchema.shape,
  	...geminiSchema.shape,
  	// kilocode_change start
@@ -376,6 +418,9 @@ label export const providerNames = [
  	...kilocodeSchema.shape,
  	...virtualQuotaFallbackSchema.shape,
  	...syntheticSchema.shape,
+
+label export const modelIdKeysByProvider: Record<TypicalProvider, ModelIdKey> = {
+
  	ollama: "ollamaModelId",
  	lmstudio: "lmStudioModelId",
  	gemini: "apiModelId",
@@ -1504,6 +1549,9 @@ label import {
  	claudeCodeModels,
  	claudeCodeDefaultModelId,
  	doubaoModels,
+
+label export const getModelsByProvider = ({
+
  				defaultModel: qwenCodeDefaultModelId,
  			}
  		}
@@ -1527,6 +1575,9 @@ label import {
  	deepSeekDefaultModelId,
  	moonshotDefaultModelId,
  	// kilocode_change start
+
+label import {
+
  	VSCodeLM,
  	XAI,
  	// kilocode_change start
@@ -1534,6 +1585,9 @@ label import {
  	VirtualQuotaFallbackProvider,
  	Synthetic,
  	OvhCloudAiEndpoints,
+
+label const ApiOptions = ({
+
  				lmstudio: { field: "lmStudioModelId" },
  				// kilocode_change start
  				kilocode: { field: "kilocodeModel", default: kilocodeDefaultModel },
@@ -1542,8 +1596,12 @@ label import {
  				ovhcloud: { field: "ovhCloudAiEndpointsModelId", default: ovhCloudAiEndpointsDefaultModelId },
  				inception: { field: "inceptionLabsModelId", default: inceptionDefaultModelId },
  
+label const ApiOptions = ({
+
+ 
  		// kilocode_change start
  		// Providers that don't have documentation pages yet
+-		const excludedProviders = ["moonshot", "chutes", "cerebras", "litellm", "zai", "qwen-code", "minimax"]
 +		const excludedProviders = [
 +			"gemini-cli",
 +			"moonshot",
@@ -1554,10 +1612,12 @@ label import {
 +			"qwen-code",
 +			"minimax",
 +		]
--		const excludedProviders = ["moonshot", "chutes", "cerebras", "litellm", "zai", "qwen-code", "minimax"]
  
  		// Skip documentation link when the provider is excluded because documentation is not available
  		if (excludedProviders.includes(selectedProvider)) {
+
+label const ApiOptions = ({
+
  			)}
  
  			{/* kilocode_change start */}
@@ -1579,6 +1639,9 @@ label import {
  	// kilocode_change end
  	mistralModels,
  	openAiNativeModels,
+
+label export const MODELS_BY_PROVIDER: Partial<Record<ProviderName, Record<string, Mod
+
  	moonshot: moonshotModels,
  	// kilocode_change start
  	// gemini: geminiModels,
@@ -1586,6 +1649,9 @@ label import {
  	// kilocode_change end
  	mistral: mistralModels,
  	"openai-native": openAiNativeModels,
+
+label export const PROVIDERS = [
+
  	{ value: "doubao", label: "Doubao", proxy: false },
  	// kilocode_change start
  	{ value: "inception", label: "Inception", proxy: false },
@@ -2044,6 +2110,9 @@ label import {
  	syntheticDefaultModelId,
  	ovhCloudAiEndpointsDefaultModelId,
  	inceptionDefaultModelId,
+
+label function getSelectedModel({
+
  				info: routerModels["kilocode"][invalidOrDefaultModel],
  			}
  		}
