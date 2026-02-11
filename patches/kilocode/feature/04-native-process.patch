@@ -1,0 +1,312 @@
+file src/core/kilocode/agent-manager/RuntimeProcessHandler.ts
+
+ 
+ import { fork, type ChildProcess, type Serializable } from "node:child_process"
+ import * as path from "node:path"
++import { terminateChildProcess } from "../../../shared/utils/process" // kilocode_change
+ import { AgentRegistry } from "./AgentRegistry"
+ import type {
+ 	StreamEvent,
+
+label export class RuntimeProcessHandler {
+
+ 			// Force kill after timeout
+ 			setTimeout(() => {
+ 				if (info.process.exitCode === null) {
+-					info.process.kill("SIGKILL")
++					terminateChildProcess(info.process, "SIGKILL") // kilocode_change
+ 				}
+ 			}, 5000)
+ 		}
+
+label export class RuntimeProcessHandler {
+
+ 
+ 			setTimeout(() => {
+ 				if (info.process.exitCode === null) {
+-					info.process.kill("SIGTERM")
++					terminateChildProcess(info.process, "SIGTERM") // kilocode_change
+ 				}
+ 			}, 1000)
+ 		}
+ 	}
+ 
+ 	/**
+ 	 * Stop all active processes
+ 	 */
+ 	public stopAllProcesses(): void {
+ 		// Stop pending process
+ 		if (this.pendingProcess) {
+ 			this.clearPendingTimeout()
+-			this.pendingProcess.process.kill("SIGTERM")
++			terminateChildProcess(this.pendingProcess.process, "SIGTERM") // kilocode_change
+ 			this.pendingProcess = null
+ 		}
+ 
+ 		// Stop all active sessions
+ 		for (const info of this.activeSessions.values()) {
+ 			if (info.process.exitCode === null) {
+-				info.process.kill("SIGTERM")
++				terminateChildProcess(info.process, "SIGTERM") // kilocode_change
+ 			}
+ 		}
+ 		this.activeSessions.clear()
+ 		this.pendingResumeContinuation.clear()
+ 	}
+ 
+ 	/**
+ 	 * Cancel a pending session
+ 	 */
+ 	public cancelPendingSession(): void {
+ 		if (this.pendingProcess) {
+ 			this.clearPendingTimeout()
+-			this.pendingProcess.process.kill("SIGTERM")
++			terminateChildProcess(this.pendingProcess.process, "SIGTERM") // kilocode_change
+ 			this.registry.clearPendingSession()
+ 			this.pendingProcess = null
+ 			this.callbacks.onPendingSessionChanged(null)
+
+file src/integrations/terminal/ExecaTerminalProcess.ts
+
+ import { execa, ExecaError } from "execa"
+ import psList from "ps-list"
+ import process from "process"
++import { terminateProcess, terminateChildProcess } from "../../shared/utils/process" // kilocode_change
+ 
+ import type { RooTerminal } from "./types"
+ import { BaseTerminalProcess } from "./BaseTerminalProcess"
+
+label export class ExecaTerminalProcess extends BaseTerminalProcess {
+
+ 
+ 					timeoutId = setTimeout(() => {
+ 						try {
+-							this.subprocess?.kill("SIGKILL")
++							if (this.subprocess) {
++								terminateChildProcess(this.subprocess, "SIGKILL") // kilocode_change
++							} else if (this.pid) {
++								terminateProcess(this.pid, "SIGKILL")
++							}
+ 						} catch (e) {}
+ 
+ 						resolve()
+
+label export class ExecaTerminalProcess extends BaseTerminalProcess {
+
+ 
+ 		// Function to perform the kill operations
+ 		const performKill = () => {
+-			// Try to kill using the subprocess object
+ 			if (this.subprocess) {
+-				try {
+-					this.subprocess.kill("SIGKILL")
+-				} catch (e) {
+-					console.warn(
+-						`[ExecaTerminalProcess#abort] Failed to kill subprocess: ${e instanceof Error ? e.message : String(e)}`,
+-					)
+-				}
+-			}
+-
+-			// Kill the stored PID (which should be the actual command after our update)
+-			if (this.pid) {
+-				try {
+-					process.kill(this.pid, "SIGKILL")
+-				} catch (e) {
+-					console.warn(
+-						`[ExecaTerminalProcess#abort] Failed to kill process ${this.pid}: ${e instanceof Error ? e.message : String(e)}`,
+-					)
+-				}
++				terminateChildProcess(this.subprocess, "SIGKILL")
++			} else if (this.pid) {
++				terminateProcess(this.pid, "SIGKILL")
+ 			}
+ 		}
+ 
+ 		// If PID update is in progress, wait for it before killing
+ 		if (this.pidUpdatePromise) {
+ 			this.pidUpdatePromise.then(performKill).catch(() => performKill())
+ 		} else {
+ 			performKill()
+ 		}
+ 
+ 		// Continue with the rest of the abort logic
+-		if (this.pid) {
++		if (this.pid && process.platform !== "win32") {
++			// kilocode_change - only need manual child cleanup on non-Windows
+ 			// Also check for any child processes
+ 			// kilocode_change start
+ 			;(async () => {
+
+file src/shared/utils/__tests__/process.spec.ts
+
++import { execSync, ChildProcess } from "child_process"
++import process from "process"
++import { terminateProcess, terminateChildProcess } from "../process"
++import { vi, describe, it, expect, beforeEach, afterEach } from "vitest"
++
++vi.mock("child_process", () => ({
++	execSync: vi.fn(),
++}))
++
++describe("terminateProcess", () => {
++	const originalPlatform = process.platform
++
++	beforeEach(() => {
++		vi.clearAllMocks()
++		vi.spyOn(process, "kill").mockImplementation(() => true)
++	})
++
++	afterEach(() => {
++		Object.defineProperty(process, "platform", {
++			value: originalPlatform,
++		})
++	})
++
++	it("should use taskkill on Windows", () => {
++		Object.defineProperty(process, "platform", {
++			value: "win32",
++		})
++
++		terminateProcess(1234)
++
++		expect(execSync).toHaveBeenCalledWith("taskkill /F /T /PID 1234", { stdio: "ignore" })
++		expect(process.kill).not.toHaveBeenCalled()
++	})
++
++	it("should fallback to process.kill on Windows if taskkill fails", () => {
++		Object.defineProperty(process, "platform", {
++			value: "win32",
++		})
++		vi.mocked(execSync).mockImplementationOnce(() => {
++			throw new Error("taskkill failed")
++		})
++
++		terminateProcess(1234, "SIGKILL")
++
++		expect(execSync).toHaveBeenCalledWith("taskkill /F /T /PID 1234", { stdio: "ignore" })
++		expect(process.kill).toHaveBeenCalledWith(1234, "SIGKILL")
++	})
++
++	it("should use process.kill on non-Windows platforms", () => {
++		Object.defineProperty(process, "platform", {
++			value: "linux",
++		})
++
++		terminateProcess(5678, "SIGTERM")
++
++		expect(execSync).not.toHaveBeenCalled()
++		expect(process.kill).toHaveBeenCalledWith(5678, "SIGTERM")
++	})
++})
++
++describe("terminateChildProcess", () => {
++	beforeEach(() => {
++		vi.clearAllMocks()
++	})
++
++	it("should use terminateProcess if pid is present", () => {
++		const mockProc = { pid: 1234, kill: vi.fn() } as unknown as ChildProcess
++		Object.defineProperty(process, "platform", {
++			value: "linux",
++		})
++		vi.spyOn(process, "kill").mockImplementation(() => true)
++
++		terminateChildProcess(mockProc, "SIGKILL")
++
++		expect(process.kill).toHaveBeenCalledWith(1234, "SIGKILL")
++		expect(mockProc.kill).not.toHaveBeenCalled()
++	})
++
++	it("should fallback to proc.kill() if pid is missing", () => {
++		const mockProc = { pid: undefined, kill: vi.fn() } as unknown as ChildProcess
++
++		terminateChildProcess(mockProc, "SIGTERM")
++
++		expect(mockProc.kill).toHaveBeenCalledWith("SIGTERM")
++	})
++})
+
+file src/shared/utils/exec.ts
+
+ // kilocode_change - new file
+ import { spawn } from "child_process"
+ import { Readable } from "stream"
++import { terminateChildProcess } from "./process" // kilocode_change
+ 
+ import { chunksToLinesAsync, combine } from "./iterable"
+ 
+
+label export async function* execGetLines({
+
+ 	} finally {
+ 		// CRITICAL: Kill the process if the loop breaks, returns, or throws.
+ 		if (!proc.killed) {
+-			proc.kill()
++			terminateChildProcess(proc) // kilocode_change
+ 		}
+ 	}
+ 
+
+label export async function* execGetLinesStdoutStderr({
+
+ 	} finally {
+ 		// CRITICAL: Kill the process if the loop breaks, returns, or throws.
+ 		if (!proc.killed) {
+-			proc.kill()
++			terminateChildProcess(proc) // kilocode_change
+ 		}
+ 	}
+ 
+
+file src/shared/utils/process.ts
+
++// kilocode_change - new file
++import { execSync, ChildProcess } from "child_process"
++import process from "process"
++
++/**
++ * Robustly terminates a process and its children.
++ * On Windows, it uses the native `taskkill` command for better reliability.
++ * On other platforms, or as a fallback, it uses standard `process.kill`.
++ *
++ * @param pid The process ID to terminate
++ * @param signal The signal to send (default: SIGTERM)
++ */
++export function terminateProcess(pid: number, signal: string = "SIGTERM"): void {
++	if (process.platform === "win32") {
++		try {
++			// /F - Forcefully terminate the process
++			// /T - Terminate child processes as well
++			// /PID - Process ID
++			execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" })
++			return
++		} catch (error) {
++			console.warn(`[terminateProcess] taskkill failed for PID ${pid}, falling back to process.kill:`, error)
++		}
++	}
++
++	try {
++		process.kill(pid, signal)
++	} catch (error) {
++		// ESRCH means the process doesn't exist, which is fine as we wanted it dead anyway
++		if ((error as any).code !== "ESRCH") {
++			console.error(`[terminateProcess] Failed to kill process ${pid} with ${signal}:`, error)
++		}
++	}
++}
++
++/**
++ * Robustly terminates a ChildProcess and its children.
++ * Handles PID extraction and fallback to native kill() if PID is missing.
++ */
++export function terminateChildProcess(proc: ChildProcess, signal: string = "SIGTERM"): void {
++	if (proc.pid) {
++		terminateProcess(proc.pid, signal)
++	} else {
++		try {
++			proc.kill(signal as any)
++		} catch (error) {
++			console.error(`[terminateChildProcess] Failed to kill process:`, error)
++		}
++	}
++}

@@ -1,0 +1,11 @@
+file webview-ui/src/components/modes/ModesView.tsx
+label const ModesView = () => {
+
+ 								const existingPrompt = customModePrompts?.[visualMode] as PromptComponent
+ 								updateAgentPrompt(visualMode, {
+ 									...existingPrompt,
+-									customInstructions: value.trim() || undefined,
++									customInstructions: value === "" ? "" : (value.trim() || undefined),
+ 								})
+ 							}
+ 						}}

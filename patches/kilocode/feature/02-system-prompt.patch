@@ -1,0 +1,74 @@
+file src/utils/shell.ts
+label function getSafeFallbackShell(): string {
+
+ // 5) Publicly Exposed Shell Getter
+ // -----------------------------------------------------
+ 
+-export function getShell(): string {
++export function getShell(terminalShellIntegrationDisabled?: boolean): string {
+ 	let shell: string | null = null
+ 
++  if (terminalShellIntegrationDisabled) {
++  	return process.platform === "win32" ? SHELL_PATHS.CMD : SHELL_PATHS.SH
++  }
++
+ 	// 1. Check VS Code config first.
+ 	if (process.platform === "win32") {
+ 		// Special logic for Windows
+
+file src/core/prompts/sections/custom-system-prompt.ts
+label function interpolatePromptContent(content: string, variables: PromptVariables):
+
+ /**
+  * Safely reads a file, returning an empty string if the file doesn't exist
+  */
+-async function safeReadFile(filePath: string): Promise<string> {
++export async function safeReadFile(filePath: string): Promise<string> {
+ 	try {
+ 		const content = await fs.readFile(filePath, "utf-8")
+ 		// When reading with "utf-8" encoding, content should be a string
+
+file src/core/prompts/system.ts
+
++import osName from "os-name"
++import * as path from "path"
++import { getShell } from "../../utils/shell"
++import { isLanguage } from "@roo-code/types"
++import { LANGUAGES } from "../../shared/language"
++import { fileExistsAtPath } from "../../utils/fs"
++import { safeReadFile } from "./sections/custom-system-prompt"
+
+label export const SYSTEM_PROMPT = async (
+
+ 	const mode =
+ 		getModeBySlug(inputMode, customModes)?.slug || modes.find((m) => m.slug === inputMode)?.slug || defaultModeSlug // kilocode_change: don't try to use non-existent modes
+ 
++  const systemPath = path.join(os.homedir(), ".kilocode", "systems")
++  const systemRolePath = path.join(systemPath, `role-${mode}.md`)
++
++	if (await fileExistsAtPath(systemRolePath)) {
++		const systemPrompt = (await Promise.all([
++			safeReadFile(systemRolePath),
++			safeReadFile(path.join(systemPath, "01-header.md")),
++			safeReadFile(path.join(systemPath, "02-tool.md")),
++			safeReadFile(path.join(systemPath, "03-mode.md")),
++			safeReadFile(path.join(systemPath, "04-footer.md")),
++			safeReadFile(path.join(cwd, "agent.md")),
++	    safeReadFile(path.join(cwd, "agents.md")),
++		])).filter(Boolean).join("\n\n").trim()
++
++   const languageIso = language ?? formatLanguage(vscode.env.language)
++   const languageName = isLanguage(languageIso) ? LANGUAGES[languageIso] : languageIso
++   const terminal = getShell(clineProviderState?.terminalShellIntegrationDisabled)
++
++		return systemPrompt
++		  .replaceAll("{{OPERATING}}", osName())
++			.replaceAll("{{TERMINAL}}", terminal.toPosix())
++			.replaceAll("{{HOMEDIR}}", os.homedir().toPosix())
++			.replaceAll("{{WORKDIR}}", cwd.toPosix())
++			.replaceAll("{{LANGUAGE}}", `${languageName} (${languageIso})`)
++	}
++
+ 	// Try to load custom system prompt from file
+ 	const variablesForPrompt: PromptVariables = {
+ 		workspace: cwd,

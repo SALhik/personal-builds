@@ -1,0 +1,119 @@
+name: 'Publish Build'
+description: 'Generate changelogs, publishes the GitHub Release, persists the new SHA, and commits the SHA file.'
+inputs:
+  old-sha:
+    description: 'The last recorded SHA'
+    required: false
+  new-sha:
+    description: 'The new head commit SHA'
+    required: false
+  target-dir:
+    description: 'The directory where the target repository was checked out (for git log)'
+    required: false
+  release-title:
+    description: 'The title of the release'
+    required: true
+  release-tag:
+    description: 'The name of the release tag'
+    required: true
+  release-glob:
+    description: 'Glob pattern to find release artifacts (e.g., "*.apk" or "MSVC-*.zip")'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate Changelogs
+      shell: bash
+      run: |
+        OLD_SHA="${{ inputs.old-sha }}"
+        NEW_SHA="${{ inputs.new-sha }}"
+        TARGET_DIR="${{ inputs.target-dir }}"
+
+        if [ -n "$NEW_SHA" ]; then
+          if [ -n "$OLD_SHA" ]; then
+            CHANGELOG=$(git -C "$TARGET_DIR" log --pretty=format:'- %s' -n 10 "$OLD_SHA..$NEW_SHA" 2>/dev/null || true)
+          fi
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG=$(git -C "$TARGET_DIR" log --pretty=format:'- %s' -n 10 "$NEW_SHA" 2>/dev/null || true)
+          fi
+        fi
+
+        echo "${CHANGELOG:-No changes detected in this build.}" > "${{ github.workspace }}/changelog.txt"
+
+    - name: Publish GitHub Release
+      shell: bash
+      run: |
+        if gh release view "${{ inputs.release-tag }}" &>/dev/null; then
+          gh release delete "${{ inputs.release-tag }}" -y --cleanup-tag
+        fi
+
+        if [[ "${{ inputs.release-glob }}" == *"/"* ]]; then
+          FILES=$(find "${{ github.workspace }}" -type f -path "*/${{ inputs.release-glob }}" | tr '\n' ' ')
+        else
+          FILES=$(find "${{ github.workspace }}" -type f -name "${{ inputs.release-glob }}" | tr '\n' ' ')
+        fi
+
+        if [ -z "$(echo $FILES | xargs)" ]; then
+          echo "Error: No artifacts found matching pattern: ${{ inputs.release-glob }}"
+          exit 1
+        fi
+
+        TITLE="${{ inputs.release-title }}"
+        SHORT_SHA=$(echo "${{ inputs.new-sha }}" | cut -c1-7)
+
+        if [ -n "$SHORT_SHA" ]; then
+          TITLE="$TITLE ($SHORT_SHA)"
+        fi
+
+        echo "Publishing release ${{ inputs.release-tag }} with title: $TITLE"
+        gh release create "${{ inputs.release-tag }}" $FILES \
+            --title "$TITLE" \
+            --notes-file "${{ github.workspace }}/changelog.txt" \
+            --prerelease
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Update Cache Branch
+      if: inputs.new-sha != '' && inputs.target-dir != ''
+      shell: bash
+      run: |
+        CACHE_DIR=$(mktemp -d)
+        SHA_FILE="${{ inputs.target-dir }}.sha"
+        SHORT_SHA=$(echo "${{ inputs.new-sha }}" | cut -c1-7)
+        REPO_URL="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+
+        if ! git clone --branch cache --single-branch --depth 1 "$REPO_URL" "$CACHE_DIR" 2>/dev/null; then
+          echo "Cache branch not found, creating orphan..."
+          mkdir -p "$CACHE_DIR"
+          cd "$CACHE_DIR"
+          git init -b cache
+          git remote add origin "$REPO_URL"
+        else
+          cd "$CACHE_DIR"
+        fi
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        echo -n "${{ inputs.new-sha }}" > "$SHA_FILE"
+        git add "$SHA_FILE"
+
+        if git commit -m "build(${{ inputs.release-tag }}): update sha to $SHORT_SHA"; then
+          for i in {1..5}; do
+            if git push origin HEAD:cache; then
+              echo "Successfully updated cache for $SHA_FILE"
+              exit 0
+            fi
+
+            echo "Push failed, retrying ($i/5)..."
+            git fetch origin cache --depth=1
+            git rebase origin/cache || git reset --hard origin/cache
+            sleep $((RANDOM % 5 + 1))
+          done
+
+          echo "Failed to push cache update after 5 attempts."
+          exit 1
+        else
+          echo "No changes to commit for $SHA_FILE"
+        fi

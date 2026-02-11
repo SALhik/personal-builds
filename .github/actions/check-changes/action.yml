@@ -1,0 +1,87 @@
+name: 'Check Changes'
+description: 'Checks out target repository and compares current SHA with the last recorded SHA.'
+inputs:
+  target-repo:
+    description: 'The repository to check (e.g., org/repo)'
+    required: true
+  target-branch:
+    description: 'The branch to check'
+    required: true
+  target-dir:
+    description: 'Local directory name for the target repository'
+    required: true
+  fetch-depth:
+    description: 'Fetch depth for git checkout'
+    required: false
+    default: 10
+
+outputs:
+  new-sha:
+    description: 'The SHA of the current head commit of the primary target repository'
+    value: ${{ steps.check_commits.outputs.new-sha }}
+  old-sha:
+    description: 'The last recorded SHA'
+    value: ${{ steps.check_commits.outputs.old-sha }}
+  short-sha:
+    description: 'The short SHA of the current head commit'
+    value: ${{ steps.check_commits.outputs.short-sha }}
+  has-changes:
+    description: 'True if new commits are detected, false otherwise'
+    value: ${{ steps.check_commits.outputs.has-changes }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout Target Repository
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.target-repo }}
+        ref: ${{ inputs.target-branch }}
+        path: ${{ inputs.target-dir }}
+        submodules: recursive
+        fetch-depth: ${{ inputs.fetch-depth }}
+
+    - name: Restore Last Cache SHA
+      id: restore_sha
+      shell: bash
+      run: |
+        SHA_FILE="${{ inputs.target-dir }}.sha"
+
+        if git fetch origin cache --depth=1 &>/dev/null; then
+          if LAST_SHA=$(git show FETCH_HEAD:"$SHA_FILE" 2>/dev/null); then
+            echo "last_sha=$LAST_SHA" >> "$GITHUB_OUTPUT"
+            echo "Found last recorded SHA for $SHA_FILE: $LAST_SHA"
+            exit 0
+          else
+            echo "Cache branch exists but $SHA_FILE not found."
+          fi
+        else
+          echo "Cache branch 'cache' not found on remote."
+        fi
+
+        echo "last_sha=" >> "$GITHUB_OUTPUT"
+        echo "No previous cache found for $SHA_FILE."
+
+    - name: Compare Commit SHAs
+      id: check_commits
+      shell: bash
+      working-directory: ${{ inputs.target-dir }}
+      run: |
+        NEW_SHA=$(git rev-parse HEAD)
+        OLD_SHA="${{ steps.restore_sha.outputs.last_sha }}"
+        SHORT_SHA=$(git rev-parse --short HEAD)
+
+        echo "new-sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
+        echo "old-sha=$OLD_SHA" >> "$GITHUB_OUTPUT"
+        echo "short-sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+        if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+          echo "has-changes=true" >> "$GITHUB_OUTPUT"
+          echo "Manual trigger detected. Build will proceed regardless of changes."
+        elif [[ "$NEW_SHA" == "$OLD_SHA" ]]; then
+          echo "has-changes=false" >> "$GITHUB_OUTPUT"
+          echo "No new commits. Build skipped."
+        else
+          echo "has-changes=true" >> "$GITHUB_OUTPUT"
+          echo "New commits detected. Build will proceed."
+        fi

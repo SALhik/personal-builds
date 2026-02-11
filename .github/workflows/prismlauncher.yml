@@ -1,0 +1,130 @@
+name: PrismLauncher
+
+on:
+  schedule:
+    - cron: '0 11 * * 6'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WORK_DIR: prismlauncher
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: windows-2022
+
+    env:
+      BUILD_TYPE: Release
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+
+    steps:
+      - name: Checkout Local Repository
+        uses: actions/checkout@v6
+
+      - name: Checkout Target Repository
+        id: check-changes
+        uses: ./.github/actions/check-changes
+        with:
+          target-repo: PrismLauncher/PrismLauncher
+          target-branch: develop
+          target-dir: ${{ env.WORK_DIR }}
+
+      - name: Prepare Workspace
+        if: steps.check-changes.outputs.has-changes == 'true'
+        uses: ./.github/actions/prepare-workspace
+        with:
+          target-dir: ${{ env.WORK_DIR }}
+
+      - name: Setup MSVC
+        if: steps.check-changes.outputs.has-changes == 'true'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+          vsversion: 2022
+
+      - name: Setup Java Environment
+        if: steps.check-changes.outputs.has-changes == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Qt
+        if: steps.check-changes.outputs.has-changes == 'true'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.1'
+          aqtversion: '==3.1.*'
+          modules: qtimageformats qtnetworkauth
+          cache: true
+
+      - name: Install Sccache
+        if: steps.check-changes.outputs.has-changes == 'true'
+        shell: pwsh
+        run: |
+          choco install sccache
+          echo "SCCACHE_PATH=$(where.exe sccache)" >> $env:GITHUB_ENV
+
+      - name: Setup sccache Cache
+        if: steps.check-changes.outputs.has-changes == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ env.WORK_DIR }}-${{ runner.os }}-sccache-${{ github.run_id }}
+
+      - name: Setup Build
+        if: steps.check-changes.outputs.has-changes == 'true'
+        working-directory: ${{ env.WORK_DIR }}
+        shell: pwsh
+        run: |
+          .$(vcpkg fetch nuget) `
+            sources add `
+            -Source "$env:FEED_URL" `
+            -StorePasswordInClearText `
+            -Name GitHubPackages `
+            -UserName "$env:WORK_DIR" `
+            -Password "$env:GITHUB_TOKEN"
+          .$(vcpkg fetch nuget) `
+            setapikey "$env:GITHUB_TOKEN" `
+            -Source "$env:FEED_URL"
+
+          "VCPKG_BINARY_SOURCES=clear;nuget,$env:FEED_URL,readwrite" | Out-File -Append $env:GITHUB_ENV
+          "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" | Out-File -Append $env:GITHUB_ENV
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FEED_URL: https://nuget.pkg.github.com/${{ env.WORK_DIR }}/index.json
+
+      - name: Build and Package
+        if: steps.check-changes.outputs.has-changes == 'true'
+        working-directory: ${{ env.WORK_DIR }}
+        shell: pwsh
+        run: |
+          cmake --preset "windows_msvc"
+          cmake --build --preset "windows_msvc" --config "${{ env.BUILD_TYPE }}"
+          cmake --install "build" --config "${{ env.BUILD_TYPE }}"
+
+          cp -r "install" "install-portable"
+          cmake --install "build" --config "${{ env.BUILD_TYPE }}" --prefix "install-portable" --component portable
+
+          $zipName = "MSVC-${env:SHORT_SHA}-${env:BUILD_TYPE}.zip"
+          $fullZipPath = Join-Path -Path $PWD -ChildPath $zipName
+          Compress-Archive -Path "install-portable\*" -DestinationPath $fullZipPath -Force
+        env:
+          SHORT_SHA: ${{ steps.check-changes.outputs.short-sha }}
+
+      - name: Publish Build and Update SHA
+        if: steps.check-changes.outputs.has-changes == 'true' && success()
+        uses: ./.github/actions/publish-build
+        with:
+          old-sha: ${{ steps.check-changes.outputs.old-sha }}
+          new-sha: ${{ steps.check-changes.outputs.new-sha }}
+          target-dir: ${{ env.WORK_DIR }}
+          release-title: PrismLauncher Nightly
+          release-tag: ${{ env.WORK_DIR }}
+          release-glob: 'MSVC-*.zip'
