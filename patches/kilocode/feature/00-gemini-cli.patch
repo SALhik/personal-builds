@@ -517,8 +517,8 @@ label export function buildApiHandler(configuration: ProviderSettings): ApiHandl
  		case "baseten":
  			return new BasetenHandler(options)
  		default:
-+			apiProvider satisfies "gemini-cli" | undefined
 -			apiProvider satisfies undefined
++			apiProvider satisfies "gemini-cli" | undefined
  			return new AnthropicHandler(options)
  	}
  }
