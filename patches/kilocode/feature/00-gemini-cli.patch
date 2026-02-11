@@ -139,7 +139,7 @@ label export const PROVIDER_DEFAULT_MODELS: Record<ProviderName, string> = {
  	deepinfra: "meta-llama/Meta-Llama-3.1-70B-Instruct",
  	"io-intelligence": "gpt-4o",
  	"qwen-code": "qwen-coder-plus-latest",
-+	"gemini-cli": "gemini-1.5-pro-latest",
++	"gemini-cli": "gemini-2.5-flash",
  	zai: "gpt-4o",
  	unbound: "gpt-4o",
  	requesty: "gpt-4o",
@@ -328,6 +328,19 @@ file packages/types/src/providers/gemini-cli.ts
 +    supportsReasoningBudget: true,
 +    requiredReasoningBudget: true,
 +  },
++  'gemini-2.5-flash-lite': {
++    maxTokens: 64_000,
++    contextWindow: 1_048_576,
++    supportsImages: true,
++    supportsNativeTools: true,
++    defaultToolProtocol: "xml",
++    supportsPromptCache: true,
++    inputPrice: 0,
++    outputPrice: 0,
++    maxThinkingTokens: 32_768,
++    supportsReasoningBudget: true,
++    requiredReasoningBudget: true,
++  },
 +} as const satisfies Record<string, ModelInfo>;
 
 file packages/types/src/providers/index.ts
@@ -491,11 +504,11 @@ file src/api/providers/gemini-cli.ts
 +    });
 +
 +    await this.ensureAuthenticated();
-+    const projectId = await this.discoverProjectId();
++    await this.discoverProjectId();
 +
 +    const requestBody: any = {
 +      model,
-+      project: projectId,
++      project: this.projectId,
 +      request: {
 +        contents: [{ role: 'user', parts: [{ text: systemInstruction }] }, ...contents],
 +        generationConfig: {
@@ -581,10 +594,11 @@ file src/api/providers/gemini-cli.ts
 +    const { id: model } = this.getModel();
 +
 +    await this.ensureAuthenticated();
-+    const projectId = await this.discoverProjectId();
++    await this.discoverProjectId();
++
 +    const requestBody = {
 +      model,
-+      project: projectId,
++      project: this.projectId,
 +      request: {
 +        contents: [{ role: 'user', parts: [{ text: prompt }] }],
 +        generationConfig: { temperature: this.options.modelTemperature ?? 0.7 },
@@ -658,36 +672,52 @@ file src/api/providers/gemini-cli.ts
 +    }
 +  }
 +
-+  private async discoverProjectId(): Promise<string> {
-+    if (this.projectId) return this.projectId;
-+    if (this.options.geminiCliProjectId) return (this.projectId = this.options.geminiCliProjectId);
++  private async discoverProjectId(): Promise<void> {
++    if (this.projectId) return;
++
++    const projectIdOptions = this.options.geminiCliProjectId?.trim();
++    if (projectIdOptions) {
++      this.projectId = projectIdOptions;
++      return;
++    }
 +
 +    if (process.env.GOOGLE_CLOUD_PROJECT) {
-+      return (this.projectId = process.env.GOOGLE_CLOUD_PROJECT);
++      this.projectId = process.env.GOOGLE_CLOUD_PROJECT;
++      return;
 +    }
 +
 +    try {
 +      const envPath = join(dirname(this.credPath), '.env');
 +      const content = await readFile(envPath, 'utf-8');
-+      const match = content.match(/GOOGLE_CLOUD_PROJECT=(.*)/);
-+      if (match) return (this.projectId = match[1].trim());
++      const match = content.match(/GOOGLE_CLOUD_PROJECT=["']?([^"'\r\n\s]+)["']?/);
++      if (match) {
++        this.projectId = match[1].trim();
++        return;
++      }
 +    } catch {}
 +
-+    const initialId = process.env.GOOGLE_CLOUD_PROJECT ?? '';
-+    const metadata = { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI', duetProject: initialId };
++    const metadata = {
++      ideType: 'IDE_UNSPECIFIED',
++      platform: 'PLATFORM_UNSPECIFIED',
++      pluginType: 'GEMINI',
++      duetProject: '',
++    };
 +
 +    try {
-+      const load = await this.callEndpoint('loadCodeAssist', { cloudaicompanionProject: initialId, metadata });
-+      if (load.cloudaicompanionProject) return (this.projectId = load.cloudaicompanionProject);
++      const load = await this.callEndpoint('loadCodeAssist', { cloudaicompanionProject: '', metadata });
++      if (load.cloudaicompanionProject) {
++        this.projectId = load.cloudaicompanionProject;
++        return;
++      }
 +
 +      const tierId = load.allowedTiers?.find((t: any) => t.isDefault)?.id || 'free-tier';
-+      let onboard = await this.callEndpoint('onboardUser', { tierId, cloudaicompanionProject: initialId, metadata });
++      let onboard = await this.callEndpoint('onboardUser', { tierId, cloudaicompanionProject: '', metadata });
 +
 +      for (let i = 0; i < 30 && !onboard.done; i++) {
 +        await new Promise((r) => setTimeout(r, 2000));
-+        onboard = await this.callEndpoint('onboardUser', { tierId, cloudaicompanionProject: initialId, metadata });
++        onboard = await this.callEndpoint('onboardUser', { tierId, cloudaicompanionProject: '', metadata });
 +      }
-+      return (this.projectId = onboard.response?.cloudaicompanionProject?.id || initialId);
++      this.projectId = onboard.response?.cloudaicompanionProject?.id || '';
 +    } catch (error: any) {
 +      throw new Error(`Gemini CLI discoverProjectId failed: ${error.response?.data || error.message}`);
 +    }
@@ -906,15 +936,26 @@ file webview-ui/src/components/settings/providers/GeminiCli.tsx
 +	)
 +
 +	return (
-+		<VSCodeTextField
-+      value={apiConfiguration?.geminiCliOAuthPath || ""}
-+      onInput={handleInputChange("geminiCliOAuthPath")}
-+      placeholder="~/.gemini/oauth_creds.json"
-+      className="w-full">
-+      <label className="block font-medium mb-1">
-+        OAuth Credentials Path (optional)
-+      </label>
-+    </VSCodeTextField>
++    <>
++      <VSCodeTextField
++        value={apiConfiguration?.geminiCliOAuthPath || ""}
++        onInput={handleInputChange("geminiCliOAuthPath")}
++        placeholder="~/.gemini/oauth_creds.json"
++        className="w-full">
++        <label className="block font-medium mb-1">
++          OAuth Credentials Path (optional)
++        </label>
++      </VSCodeTextField>
++      <VSCodeTextField
++        value={apiConfiguration?.geminiCliProjectId || ""}
++        onInput={handleInputChange("geminiCliProjectId")}
++        placeholder="leave blank to use from .env"
++        className="w-full">
++        <label className="block font-medium mb-1">
++          OAuth Project Id (optional)
++        </label>
++      </VSCodeTextField>
++    </>
 +	)
 +}
 
